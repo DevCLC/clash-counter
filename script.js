@@ -36,7 +36,8 @@ let timer = {
     remainingSeconds: 300,
     isRunning: false,
     interval: null,
-    totalTime: 300
+    totalTime: 300,
+    lastUpdate: Date.now()
 };
 
 // Элементы DOM для таймера
@@ -62,19 +63,67 @@ function loadFromFirebase() {
             state.wins = data.wins || 0;
             state.losses = data.losses || 0;
             updateDisplay();
-            console.log('✅ Данные загружены из Firebase');
+            console.log('✅ Данные счетчика загружены из Firebase');
         } else {
             // Если данных нет, создаем начальные
-            saveToFirebase();
+            saveCounterToFirebase();
         }
     }, (error) => {
-        console.error('❌ Ошибка загрузки из Firebase:', error);
+        console.error('❌ Ошибка загрузки счетчика из Firebase:', error);
         loadFromLocalStorage(); // Загружаем из локального хранилища
+    });
+    
+    // Загружаем таймер из Firebase
+    const timerRef = database.ref('timer');
+    
+    timerRef.on('value', (snapshot) => {
+        const timerData = snapshot.val();
+        
+        if (timerData) {
+            // Восстанавливаем таймер из Firebase
+            const now = Date.now();
+            const elapsedSeconds = Math.floor((now - timerData.lastUpdate) / 1000);
+            
+            if (timerData.isRunning) {
+                // Если таймер был запущен, вычитаем прошедшее время
+                const newRemaining = Math.max(0, timerData.remainingSeconds - elapsedSeconds);
+                timer.remainingSeconds = newRemaining;
+                timer.totalSeconds = timerData.totalSeconds;
+                timer.totalTime = timerData.totalTime;
+                timer.isRunning = timerData.isRunning && newRemaining > 0;
+                
+                if (timer.isRunning && !timer.interval) {
+                    // Перезапускаем таймер
+                    startTimerFromFirebase();
+                }
+            } else {
+                // Если таймер был остановлен
+                timer.totalSeconds = timerData.totalSeconds;
+                timer.remainingSeconds = timerData.remainingSeconds;
+                timer.totalTime = timerData.totalTime;
+                timer.isRunning = false;
+                
+                if (timer.interval) {
+                    clearInterval(timer.interval);
+                    timer.interval = null;
+                }
+            }
+            
+            updateTimerDisplay();
+            updateTimerButtons();
+            console.log('✅ Данные таймера загружены из Firebase');
+        } else {
+            // Если данных таймера нет, сохраняем текущие
+            saveTimerToFirebase();
+        }
+    }, (error) => {
+        console.error('❌ Ошибка загрузки таймера из Firebase:', error);
+        loadTimerFromLocalStorage();
     });
 }
 
-// Сохранить в Firebase
-function saveToFirebase() {
+// Сохранить счетчик в Firebase
+function saveCounterToFirebase() {
     const counterRef = database.ref('counter');
     
     counterRef.set({
@@ -83,22 +132,53 @@ function saveToFirebase() {
         lastUpdate: firebase.database.ServerValue.TIMESTAMP
     })
     .then(() => {
-        console.log('✅ Данные сохранены в Firebase');
-        saveToLocalStorage(); // Также сохраняем локально
+        console.log('✅ Данные счетчика сохранены в Firebase');
+        saveCounterToLocalStorage(); // Также сохраняем локально
     })
     .catch((error) => {
-        console.error('❌ Ошибка сохранения в Firebase:', error);
-        saveToLocalStorage(); // Сохраняем хотя бы локально
+        console.error('❌ Ошибка сохранения счетчика в Firebase:', error);
+        saveCounterToLocalStorage(); // Сохраняем хотя бы локально
+    });
+}
+
+// Сохранить таймер в Firebase
+function saveTimerToFirebase() {
+    const timerRef = database.ref('timer');
+    
+    timerRef.set({
+        totalSeconds: timer.totalSeconds,
+        remainingSeconds: timer.remainingSeconds,
+        isRunning: timer.isRunning,
+        totalTime: timer.totalTime,
+        lastUpdate: Date.now()
+    })
+    .then(() => {
+        console.log('✅ Данные таймера сохранены в Firebase');
+        saveTimerToLocalStorage(); // Также сохраняем локально
+    })
+    .catch((error) => {
+        console.error('❌ Ошибка сохранения таймера в Firebase:', error);
+        saveTimerToLocalStorage(); // Сохраняем хотя бы локально
     });
 }
 
 // === ЛОКАЛЬНОЕ ХРАНИЛИЩЕ (резервное) ===
 
-function saveToLocalStorage() {
+function saveCounterToLocalStorage() {
     localStorage.setItem('counterBackup', JSON.stringify({
         wins: state.wins,
         losses: state.losses,
         timestamp: Date.now()
+    }));
+}
+
+function saveTimerToLocalStorage() {
+    localStorage.setItem('timerBackup', JSON.stringify({
+        totalSeconds: timer.totalSeconds,
+        remainingSeconds: timer.remainingSeconds,
+        isRunning: timer.isRunning,
+        totalTime: timer.totalTime,
+        lastUpdate: Date.now()
     }));
 }
 
@@ -109,7 +189,21 @@ function loadFromLocalStorage() {
         state.wins = data.wins || 0;
         state.losses = data.losses || 0;
         updateDisplay();
-        console.log('✅ Данные загружены из локального хранилища');
+        console.log('✅ Данные счетчика загружены из локального хранилища');
+    }
+}
+
+function loadTimerFromLocalStorage() {
+    const saved = localStorage.getItem('timerBackup');
+    if (saved) {
+        const data = JSON.parse(saved);
+        timer.totalSeconds = data.totalSeconds || 300;
+        timer.remainingSeconds = data.remainingSeconds || timer.totalSeconds;
+        timer.totalTime = data.totalTime || timer.totalSeconds;
+        timer.isRunning = false; // Всегда загружаем остановленным из локального хранилища
+        updateTimerDisplay();
+        updateTimerButtons();
+        console.log('✅ Данные таймера загружены из локального хранилища');
     }
 }
 
@@ -151,7 +245,7 @@ function changeCounter(type, delta) {
     state[type] = Math.max(0, state[type] + delta);
     
     updateDisplay();
-    saveToFirebase(); // Сохраняем в Firebase
+    saveCounterToFirebase(); // Сохраняем в Firebase
 }
 
 // Сбросить счетчик
@@ -164,10 +258,34 @@ function resetCounter() {
     document.getElementById('losses').classList.add('number-change');
     
     updateDisplay();
-    saveToFirebase(); // Сохраняем в Firebase
+    saveCounterToFirebase(); // Сохраняем в Firebase
 }
 
 // === ФУНКЦИИ ТАЙМЕРА ===
+
+// Обновить кнопки таймера
+function updateTimerButtons() {
+    const startBtn = document.querySelector('.start-btn');
+    const pauseBtn = document.querySelector('.pause-btn');
+    
+    if (timer.isRunning) {
+        // Показать кнопку паузы
+        if (startBtn && startBtn.style.display !== 'none') {
+            startBtn.style.display = 'none';
+        }
+        if (pauseBtn && pauseBtn.style.display !== 'flex') {
+            pauseBtn.style.display = 'flex';
+        }
+    } else {
+        // Показать кнопку старта
+        if (startBtn && startBtn.style.display !== 'flex') {
+            startBtn.style.display = 'flex';
+        }
+        if (pauseBtn && pauseBtn.style.display !== 'none') {
+            pauseBtn.style.display = 'none';
+        }
+    }
+}
 
 // Открыть окно установки времени
 function openTimePicker() {
@@ -184,11 +302,15 @@ function openTimePicker() {
     
     timerElements.modal.style.display = 'flex';
     timerElements.hoursInput.focus();
+    
+    // Добавляем класс к body для блокировки скролла
+    document.body.classList.add('modal-open');
 }
 
 // Закрыть окно установки времени
 function closeTimePicker() {
     timerElements.modal.style.display = 'none';
+    document.body.classList.remove('modal-open');
 }
 
 // Установить пользовательское время
@@ -206,8 +328,16 @@ function setCustomTime() {
     timer.totalSeconds = (hours * 3600) + (minutes * 60) + seconds;
     timer.remainingSeconds = timer.totalSeconds;
     timer.totalTime = timer.totalSeconds;
+    timer.isRunning = false;
+    
+    if (timer.interval) {
+        clearInterval(timer.interval);
+        timer.interval = null;
+    }
     
     updateTimerDisplay();
+    updateTimerButtons();
+    saveTimerToFirebase(); // Сохраняем в Firebase
     closeTimePicker();
 }
 
@@ -243,6 +373,29 @@ function updateTimerDisplay() {
     }
 }
 
+// Запустить таймер из Firebase (с учетом прошедшего времени)
+function startTimerFromFirebase() {
+    if (timer.interval) {
+        clearInterval(timer.interval);
+    }
+    
+    timer.isRunning = true;
+    timerElements.display.parentElement.classList.add('timer-running');
+    updateTimerButtons();
+    
+    timer.interval = setInterval(() => {
+        timer.remainingSeconds--;
+        updateTimerDisplay();
+        
+        // Сохраняем состояние каждую секунду
+        saveTimerToFirebase();
+        
+        if (timer.remainingSeconds <= 0) {
+            timerFinished();
+        }
+    }, 1000);
+}
+
 // Запустить/остановить таймер
 function toggleTimer(event) {
     if (event) event.stopPropagation();
@@ -264,27 +417,21 @@ function startTimer() {
     
     timer.isRunning = true;
     timerElements.display.parentElement.classList.add('timer-running');
+    updateTimerButtons();
     
     timer.interval = setInterval(() => {
         timer.remainingSeconds--;
         updateTimerDisplay();
+        
+        // Сохраняем состояние каждую секунду
+        saveTimerToFirebase();
         
         if (timer.remainingSeconds <= 0) {
             timerFinished();
         }
     }, 1000);
     
-    // Поменять иконку на паузу
-    const startBtn = document.querySelector('.start-btn');
-    startBtn.innerHTML = `
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-            <path d="M6 5H10V19H6V5Z" fill="currentColor"/>
-            <path d="M14 5H18V19H14V5Z" fill="currentColor"/>
-        </svg>
-    `;
-    startBtn.classList.remove('start-btn');
-    startBtn.classList.add('pause-btn');
-    startBtn.setAttribute('onclick', 'pauseTimer(event)');
+    saveTimerToFirebase(); // Сохраняем в Firebase
 }
 
 // Остановить таймер
@@ -293,18 +440,11 @@ function pauseTimer(event) {
     
     timer.isRunning = false;
     clearInterval(timer.interval);
+    timer.interval = null;
     timerElements.display.parentElement.classList.remove('timer-running');
+    updateTimerButtons();
     
-    // Поменять иконку на старт
-    const pauseBtn = document.querySelector('.pause-btn');
-    pauseBtn.innerHTML = `
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-            <path d="M8 5V19L19 12L8 5Z" fill="currentColor"/>
-        </svg>
-    `;
-    pauseBtn.classList.remove('pause-btn');
-    pauseBtn.classList.add('start-btn');
-    pauseBtn.setAttribute('onclick', 'startTimer(event)');
+    saveTimerToFirebase(); // Сохраняем в Firebase
 }
 
 // Сбросить таймер
@@ -313,43 +453,22 @@ function resetTimer(event) {
     
     timer.isRunning = false;
     clearInterval(timer.interval);
+    timer.interval = null;
     timer.remainingSeconds = timer.totalSeconds;
     timerElements.display.parentElement.classList.remove('timer-running');
-    
-    // Поменять иконку на старт (если была пауза)
-    const pauseBtn = document.querySelector('.pause-btn');
-    if (pauseBtn) {
-        pauseBtn.innerHTML = `
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                <path d="M8 5V19L19 12L8 5Z" fill="currentColor"/>
-            </svg>
-        `;
-        pauseBtn.classList.remove('pause-btn');
-        pauseBtn.classList.add('start-btn');
-        pauseBtn.setAttribute('onclick', 'startTimer(event)');
-    }
-    
+    updateTimerButtons();
     updateTimerDisplay();
+    
+    saveTimerToFirebase(); // Сохраняем в Firebase
 }
 
 // Таймер завершен
 function timerFinished() {
     timer.isRunning = false;
     clearInterval(timer.interval);
+    timer.interval = null;
     timerElements.display.parentElement.classList.remove('timer-running');
-    
-    // Поменять иконку на старт
-    const pauseBtn = document.querySelector('.pause-btn');
-    if (pauseBtn) {
-        pauseBtn.innerHTML = `
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
-                <path d="M8 5V19L19 12L8 5Z" fill="currentColor"/>
-            </svg>
-        `;
-        pauseBtn.classList.remove('pause-btn');
-        pauseBtn.classList.add('start-btn');
-        pauseBtn.setAttribute('onclick', 'startTimer(event)');
-    }
+    updateTimerButtons();
     
     // Воспроизвести звук
     try {
@@ -384,6 +503,8 @@ function timerFinished() {
             timerElements.display.style.visibility = 'visible';
         }
     }, 500);
+    
+    saveTimerToFirebase(); // Сохраняем в Firebase
 }
 
 // === ГЛОБАЛЬНЫЕ ГОРЯЧИЕ КЛАВИШИ ===
@@ -434,6 +555,12 @@ document.addEventListener('keydown', (e) => {
                 }
                 e.preventDefault();
                 break;
+                
+            case 's': // Сброс таймера
+            case 'ы': // Русская S
+                resetTimer();
+                e.preventDefault();
+                break;
         }
     }
     
@@ -461,18 +588,20 @@ window.addEventListener('click', (e) => {
 document.addEventListener('DOMContentLoaded', () => {
     // Сначала загружаем из локального хранилища для быстрого отображения
     loadFromLocalStorage();
+    loadTimerFromLocalStorage();
     
     // Затем загружаем из Firebase (обновится, если есть новые данные)
     loadFromFirebase();
     
     // Инициализация таймера
     updateTimerDisplay();
+    updateTimerButtons();
     
     console.log('🎮 Горячие клавиши:');
     console.log('=== Счетчик ===');
     console.log('Alt+W — победа');
     console.log('Alt+L — поражение');
-    console.log('Alt+R — сброс');
+    console.log('Alt+R — сброс счетчика');
     console.log('Alt+1 — +2 победы');
     console.log('Alt+2 — +2 поражения');
     console.log('');
@@ -480,40 +609,17 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Клик по таймеру — установить время');
     console.log('Alt+T — запуск/пауза таймера');
     console.log('Alt+Пробел — запуск/пауза таймера');
+    console.log('Alt+S — сброс таймера');
     console.log('Esc — закрыть окно установки времени');
     console.log('Enter — установить выбранное время');
     
-    // Автосохранение в Firebase каждые 30 секунд (на всякий случай)
+    // Автосохранение в Firebase каждые 10 секунд
     setInterval(() => {
         if (state.wins > 0 || state.losses > 0) {
-            saveToFirebase();
+            saveCounterToFirebase();
         }
-    }, 30000);
-    
-    // Сохранение состояния таймера в localStorage
-    setInterval(() => {
         if (timer.totalSeconds > 0) {
-            localStorage.setItem('timerBackup', JSON.stringify({
-                totalSeconds: timer.totalSeconds,
-                remainingSeconds: timer.remainingSeconds,
-                isRunning: timer.isRunning,
-                totalTime: timer.totalTime
-            }));
+            saveTimerToFirebase();
         }
     }, 10000);
-    
-    // Восстановление таймера из localStorage
-    const savedTimer = localStorage.getItem('timerBackup');
-    if (savedTimer) {
-        const timerData = JSON.parse(savedTimer);
-        timer.totalSeconds = timerData.totalSeconds || 300;
-        timer.remainingSeconds = timerData.remainingSeconds || timer.totalSeconds;
-        timer.totalTime = timerData.totalTime || timer.totalSeconds;
-        updateTimerDisplay();
-        
-        // Если таймер был запущен, продолжить (с корректировкой времени)
-        if (timerData.isRunning && timer.remainingSeconds > 0) {
-            setTimeout(() => startTimer(), 100);
-        }
-    }
 });
