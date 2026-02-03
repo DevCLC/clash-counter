@@ -1,41 +1,121 @@
+// === КОНФИГУРАЦИЯ FIREBASE ===
+// Ваша конфигурация из Firebase Console
+const firebaseConfig = {
+    apiKey: "AIzaSyBgYm1QG6AmxWPgcqOtvdyyRs7RL8sFnTg",
+    authDomain: "stream-counter-666.firebaseapp.com",
+    databaseURL: "https://stream-counter-666-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "stream-counter-666",
+    storageBucket: "stream-counter-666.firebasestorage.app",
+    messagingSenderId: "280356263000",
+    appId: "1:280356263000:web:e6affe74f44a776d7de62d"
+};
+
+// Инициализация Firebase
+if (!firebase.apps.length) {
+    firebase.initializeApp(firebaseConfig);
+}
+const database = firebase.database();
+
 // Состояние счетчика
 let state = {
     wins: 0,
     losses: 0
 };
 
-// Загрузить из сохранения
-function loadState() {
-    const saved = localStorage.getItem('counterState');
+// Элементы DOM
+const elements = {
+    wins: document.getElementById('wins'),
+    losses: document.getElementById('losses'),
+    total: document.getElementById('total'),
+    winrate: document.getElementById('winrate')
+};
+
+// === СИНХРОНИЗАЦИЯ С FIREBASE ===
+
+// Загрузить данные из Firebase
+function loadFromFirebase() {
+    const counterRef = database.ref('counter');
+    
+    counterRef.on('value', (snapshot) => {
+        const data = snapshot.val();
+        
+        if (data) {
+            state.wins = data.wins || 0;
+            state.losses = data.losses || 0;
+            updateDisplay();
+            console.log('✅ Данные загружены из Firebase');
+        } else {
+            // Если данных нет, создаем начальные
+            saveToFirebase();
+        }
+    }, (error) => {
+        console.error('❌ Ошибка загрузки из Firebase:', error);
+        loadFromLocalStorage(); // Загружаем из локального хранилища
+    });
+}
+
+// Сохранить в Firebase
+function saveToFirebase() {
+    const counterRef = database.ref('counter');
+    
+    counterRef.set({
+        wins: state.wins,
+        losses: state.losses,
+        lastUpdate: firebase.database.ServerValue.TIMESTAMP
+    })
+    .then(() => {
+        console.log('✅ Данные сохранены в Firebase');
+        saveToLocalStorage(); // Также сохраняем локально
+    })
+    .catch((error) => {
+        console.error('❌ Ошибка сохранения в Firebase:', error);
+        saveToLocalStorage(); // Сохраняем хотя бы локально
+    });
+}
+
+// === ЛОКАЛЬНОЕ ХРАНИЛИЩЕ (резервное) ===
+
+function saveToLocalStorage() {
+    localStorage.setItem('counterBackup', JSON.stringify({
+        wins: state.wins,
+        losses: state.losses,
+        timestamp: Date.now()
+    }));
+}
+
+function loadFromLocalStorage() {
+    const saved = localStorage.getItem('counterBackup');
     if (saved) {
-        state = JSON.parse(saved);
+        const data = JSON.parse(saved);
+        state.wins = data.wins || 0;
+        state.losses = data.losses || 0;
+        updateDisplay();
+        console.log('✅ Данные загружены из локального хранилища');
     }
 }
 
-// Сохранить состояние
-function saveState() {
-    localStorage.setItem('counterState', JSON.stringify(state));
-}
+// === ОСНОВНЫЕ ФУНКЦИИ ===
 
 // Обновить отображение
 function updateDisplay() {
-    document.getElementById('wins').textContent = state.wins;
-    document.getElementById('losses').textContent = state.losses;
+    // Обновляем числа
+    elements.wins.textContent = state.wins;
+    elements.losses.textContent = state.losses;
     
+    // Рассчитываем статистику
     const total = state.wins + state.losses;
     const winrate = total > 0 ? Math.round((state.wins / total) * 100) : 0;
     
-    document.getElementById('total').textContent = total;
-    document.getElementById('winrate').textContent = winrate + '%';
+    elements.total.textContent = total;
+    elements.winrate.textContent = winrate + '%';
     
     // Динамический цвет винрейта
-    const winrateEl = document.getElementById('winrate');
     if (winrate >= 70) {
-        winrateEl.style.color = '#2ecc71';
+        elements.winrate.style.color = '#2ecc71';
     } else if (winrate >= 50) {
-        winrateEl.style.color = '#f39c12';
+        elements.winrate.style.color = '#f39c12';
     } else {
-        winrateEl.style.color = '#e74c3c';
+        elements.winrate.style.color = '#e74c3c';
     }
 }
 
@@ -52,21 +132,21 @@ function changeCounter(type, delta) {
     state[type] = Math.max(0, state[type] + delta);
     
     updateDisplay();
-    saveState();
+    saveToFirebase(); // Сохраняем в Firebase
 }
 
 // Сбросить счетчик
 function resetCounter() {
-        state.wins = 0;
-        state.losses = 0;
-        
-        // Анимация сброса
-        document.getElementById('wins').classList.add('number-change');
-        document.getElementById('losses').classList.add('number-change');
-        
-        updateDisplay();
-        saveState();
-    }
+    state.wins = 0;
+    state.losses = 0;
+    
+    // Анимация сброса
+    document.getElementById('wins').classList.add('number-change');
+    document.getElementById('losses').classList.add('number-change');
+    
+    updateDisplay();
+    saveToFirebase(); // Сохраняем в Firebase
+}
 
 // Горячие клавиши
 document.addEventListener('keydown', (e) => {
@@ -105,14 +185,23 @@ document.addEventListener('keydown', (e) => {
 
 // Инициализация
 document.addEventListener('DOMContentLoaded', () => {
-    loadState();
-    updateDisplay();
+    // Сначала загружаем из локального хранилища для быстрого отображения
+    loadFromLocalStorage();
     
-    // Автосохранение
-    setInterval(saveState, 10000);
+    // Затем загружаем из Firebase (обновится, если есть новые данные)
+    loadFromFirebase();
     
-    console.log('Горячие клавиши:');
+    console.log('🎮 Горячие клавиши:');
     console.log('Alt+W — победа');
     console.log('Alt+L — поражение');
     console.log('Alt+R — сброс');
+    console.log('Alt+1 — +2 победы');
+    console.log('Alt+2 — +2 поражения');
+    
+    // Автосохранение в Firebase каждые 30 секунд (на всякий случай)
+    setInterval(() => {
+        if (state.wins > 0 || state.losses > 0) {
+            saveToFirebase();
+        }
+    }, 30000);
 });
